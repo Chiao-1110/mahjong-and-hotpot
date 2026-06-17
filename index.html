@@ -294,7 +294,7 @@
       <button class="btn-refresh" id="refreshBtn">🔄 重新整理</button>
     </div>
     <section class="card">
-      <h2><span class="dot">●</span>累積輸贏排行（只算麻將）</h2>
+      <h2><span class="dot">●</span>累積輸贏排行</h2>
       <div class="rank-list" id="rankList"></div>
     </section>
     <section class="card">
@@ -303,7 +303,6 @@
     </section>
   </div>
 
-  <footer>資料只存在你的手機本機（localStorage），不會上傳。</footer>
 </div>
 
 <!-- 成員編輯 Modal -->
@@ -407,6 +406,7 @@
     if(!state.members || state.members.length===0){
       state.members = DEFAULT_MEMBERS.map(m=>Object.assign({},m));
     }
+    state.members.forEach(m=>{ if(typeof m.updatedAt!=="number") m.updatedAt=0; if(m.synced===undefined) m.synced=!SYNC_ON; });
     if(!state.date) state.date = todayStr();
     if(!Array.isArray(state.history)) state.history=[];
     state.history.forEach(r=>{ if(!r.sessionId) r.sessionId=r.id||uid(); if(r.synced===undefined) r.synced=!SYNC_ON; });
@@ -450,11 +450,15 @@
       const serverIds = new Set(server.map(s=>s.sessionId));
       const pending = state.history.filter(r=>!r.synced && !serverIds.has(r.sessionId));
       state.history = server.concat(pending);
+      // 合併名單（名字／頭貼）：後寫者勝，未上傳的本機異動補送
+      const pendingMembers = mergeMembers(data.members||[]);
       save();
+      renderSettle();
       renderRecords();
       setSyncStatus("ok");
-      // 把本機尚未上傳的場次補送
+      // 把本機尚未上傳的場次與成員異動補送
       for(const rec of pending){ await pushSession(rec, true); }
+      for(const m of pendingMembers){ await pushMember(m, true); }
     }catch(e){
       console.warn("同步失敗，使用本機快取", e);
       setSyncStatus("offline");
@@ -500,6 +504,94 @@
       return true;
     }catch(e){
       console.warn("刪除同步失敗", e);
+      setSyncStatus("offline");
+      return false;
+    }
+  }
+
+  /* 合併伺服器名單到本機：後寫者勝（updatedAt）。回傳「需補送到雲端」的成員陣列。 */
+  function mergeMembers(serverMembers){
+    const byId={};
+    state.members.forEach(m=>{ byId[m.id]=m; });
+    serverMembers.forEach(sm=>{
+      const local=byId[sm.id];
+      if(!local || (sm.updatedAt||0) >= (local.updatedAt||0)){
+        byId[sm.id]={id:sm.id, name:sm.name, avatar:sm.avatar||"", updatedAt:sm.updatedAt||0, synced:true};
+      }
+    });
+    state.members = Object.values(byId);
+    // 伺服器為空（首次）→ 把本機名單全部當初始名單上傳；否則只補送尚未同步者
+    return state.members.filter(m=>!m.synced);
+  }
+
+  /* 把過大的 base64 頭貼再壓小（Google 試算表單格上限 5 萬字元） */
+  function shrinkDataUri(dataUri, maxSize, quality){
+    return new Promise(resolve=>{
+      try{
+        const img=new Image();
+        img.onload=()=>{
+          let {width,height}=img;
+          if(width>height){ if(width>maxSize){height*=maxSize/width;width=maxSize;} }
+          else { if(height>maxSize){width*=maxSize/height;height=maxSize;} }
+          const canvas=document.createElement("canvas");
+          canvas.width=width; canvas.height=height;
+          canvas.getContext("2d").drawImage(img,0,0,width,height);
+          resolve(canvas.toDataURL("image/jpeg",quality));
+        };
+        img.onerror=()=>resolve(null);
+        img.src=dataUri;
+      }catch(e){ resolve(null); }
+    });
+  }
+
+  async function pushMember(m, quiet){
+    if(!SYNC_ON) return true;
+    if(!quiet) setSyncStatus("syncing");
+    try{
+      if(m.avatar && m.avatar.length>40000){
+        const small = await shrinkDataUri(m.avatar, 200, 0.7);
+        if(small && small.length < m.avatar.length){
+          m.avatar = small;
+          const local = state.members.find(x=>x.id===m.id);
+          if(local) local.avatar = small;
+          save();
+        }
+      }
+      const res = await fetch(SHEET_API, {
+        method:"POST",
+        headers:{"Content-Type":"text/plain;charset=utf-8"},
+        body: JSON.stringify({action:"saveMember", token:sheetToken, member:{
+          id:m.id, name:m.name, avatar:m.avatar||"", updatedAt:m.updatedAt||Date.now()
+        }})
+      });
+      const data = await res.json();
+      if(!data.ok) throw new Error(data.error||"server error");
+      const local = state.members.find(x=>x.id===m.id);
+      if(local) local.synced=true;
+      save();
+      if(!quiet) setSyncStatus("ok");
+      return true;
+    }catch(e){
+      console.warn("成員上傳失敗，已暫存本機", e);
+      setSyncStatus("offline");
+      return false;
+    }
+  }
+
+  async function deleteMemberFromSheet(memberId){
+    if(!SYNC_ON) return true;
+    try{
+      const res = await fetch(SHEET_API, {
+        method:"POST",
+        headers:{"Content-Type":"text/plain;charset=utf-8"},
+        body: JSON.stringify({action:"deleteMember", token:sheetToken, memberId})
+      });
+      const data = await res.json();
+      if(!data.ok) throw new Error(data.error||"server error");
+      setSyncStatus("ok");
+      return true;
+    }catch(e){
+      console.warn("成員刪除同步失敗", e);
       setSyncStatus("offline");
       return false;
     }
@@ -879,7 +971,7 @@
   document.getElementById("avatarPick").addEventListener("click", ()=>document.getElementById("avatarFile").click());
   document.getElementById("avatarFile").addEventListener("change", e=>{
     const file=e.target.files[0]; if(!file) return;
-    resizeImage(file, 256, dataUri=>{
+    resizeImage(file, 200, dataUri=>{
       pendingAvatar=dataUri;
       const pick=document.getElementById("avatarPick");
       pick.style.backgroundImage=`url('${dataUri}')`;
@@ -893,25 +985,32 @@
   document.getElementById("modalSave").addEventListener("click", ()=>{
     const name=document.getElementById("memberName").value.trim();
     if(!name){ alert("請輸入名字"); return; }
+    let changed;
     if(editingId){
       const m=memberById(editingId);
       m.name=name;
       if(pendingAvatar!==null) m.avatar=pendingAvatar;
+      m.updatedAt=Date.now(); m.synced=false;
+      changed=m;
     }else{
       const id=uid();
-      state.members.push({id, name, avatar: pendingAvatar||""});
+      changed={id, name, avatar: pendingAvatar||"", updatedAt:Date.now(), synced:false};
+      state.members.push(changed);
       state.present[id]=true;
     }
     save(); closeMemberModal(); renderSettle();
+    pushMember(changed);
   });
   document.getElementById("modalDelete").addEventListener("click", ()=>{
     if(!editingId) return;
     if(!confirm("確定刪除這位成員？（歷史紀錄中的名字會保留）")) return;
-    state.members=state.members.filter(m=>m.id!==editingId);
-    delete state.present[editingId];
-    delete state.amounts[editingId];
-    Object.keys(state.payers).forEach(k=>{ if(state.payers[k]===editingId) state.payers[k]=""; });
+    const removedId=editingId;
+    state.members=state.members.filter(m=>m.id!==removedId);
+    delete state.present[removedId];
+    delete state.amounts[removedId];
+    Object.keys(state.payers).forEach(k=>{ if(state.payers[k]===removedId) state.payers[k]=""; });
     save(); closeMemberModal(); renderSettle();
+    deleteMemberFromSheet(removedId);
   });
 
   function resizeImage(file, maxSize, cb){
@@ -925,7 +1024,7 @@
         const canvas=document.createElement("canvas");
         canvas.width=width; canvas.height=height;
         canvas.getContext("2d").drawImage(img,0,0,width,height);
-        cb(canvas.toDataURL("image/jpeg",0.8));
+        cb(canvas.toDataURL("image/jpeg",0.72));
       };
       img.src=ev.target.result;
     };
