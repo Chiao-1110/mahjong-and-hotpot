@@ -4,20 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#0f5132">
-<title>🀄 壞朋友的築麻小天地</title>
+<title>🀄 壞朋友收容中心</title>
 <style>
   :root{
-    --felt:#0f5132;          /* 麻將桌綠 */
-    --felt-dark:#0b3d27;
-    --felt-light:#157347;
-    --cream:#f7f3e8;         /* 米白卡片 */
-    --cream-2:#fffdf7;
+    --felt:#c2a988;          /* 淺咖啡拿鐵底 */
+    --felt-dark:#a8896a;
+    --felt-light:#dcc8ac;
+    --cream:#fdfaf3;         /* 米白卡片 */
+    --cream-2:#ffffff;
     --ink:#2b2b2b;
     --muted:#7a7468;
-    --red:#c0392b;           /* 中（紅）*/
-    --gold:#caa14a;          /* 金點綴 */
-    --green-pos:#1e7e4f;     /* 該收 */
-    --line:#e3dcc8;
+    --red:#b5402e;           /* 中（紅）*/
+    --gold:#a87d4a;          /* 咖啡金點綴 */
+    --green-pos:#3f7d5c;     /* 該收 */
+    --line:#ece2d0;
     --shadow:0 4px 14px rgba(0,0,0,.18);
     --radius:16px;
   }
@@ -36,20 +36,21 @@
   .wrap{max-width:560px;margin:0 auto;}
 
   /* 標題 */
-  header{text-align:center;color:var(--cream);margin:6px 0 14px;}
-  header h1{font-size:24px;margin:0;letter-spacing:1px;text-shadow:0 2px 6px rgba(0,0,0,.35);}
+  header{text-align:center;color:#5a4632;margin:6px 0 14px;}
+  header h1{font-size:24px;margin:0;letter-spacing:1px;color:#5a4632;}
   header h1 .tile{
     display:inline-block;background:var(--cream);color:var(--red);
     border-radius:7px;padding:2px 7px;margin-right:6px;
     box-shadow:inset 0 -3px 0 rgba(0,0,0,.12), var(--shadow);font-size:22px;
   }
-  header .sub{font-size:13px;color:rgba(255,255,255,.78);margin-top:4px;}
+  header .sub{font-size:13px;color:rgba(90,70,50,.82);margin-top:4px;}
+  #memberName.locked{background:#eee;color:#888;cursor:not-allowed;}
 
   /* 分頁 */
   .tabs{display:flex;gap:8px;max-width:560px;margin:0 auto 14px;}
   .tab{
     flex:1;text-align:center;padding:11px;border-radius:13px;
-    background:rgba(255,255,255,.14);color:rgba(255,255,255,.8);
+    background:rgba(255,255,255,.45);color:rgba(90,70,50,.7);
     font-weight:700;font-size:15px;cursor:pointer;border:1.5px solid transparent;
   }
   .tab.active{background:var(--cream);color:var(--felt-dark);box-shadow:var(--shadow);border-color:var(--gold);}
@@ -229,12 +230,13 @@
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="tile">🀄</span>壞朋友的築麻小天地</h1>
+    <h1><span class="tile">🀄</span>壞朋友收容中心</h1>
+    <div class="sub">你這週要築麻嗎</div>
   </header>
 
   <div class="tabs">
     <div class="tab active" data-tab="settle">💰 結算</div>
-    <div class="tab" data-tab="records">📒 紀錄</div>
+    <div class="tab" data-tab="records">📒 排行榜</div>
   </div>
 
   <!-- ============ 結算頁 ============ -->
@@ -957,8 +959,11 @@
   function openMemberModal(id){
     editingId=id; pendingAvatar=null;
     const m = id?memberById(id):null;
-    document.getElementById("modalTitle").textContent = m?"編輯成員":"新增成員";
-    document.getElementById("memberName").value = m?m.name:"";
+    document.getElementById("modalTitle").textContent = m?"更換頭貼":"新增成員";
+    const nameInput=document.getElementById("memberName");
+    nameInput.value = m?m.name:"";
+    nameInput.readOnly = !!m;
+    nameInput.classList.toggle("locked", !!m);
     const pick=document.getElementById("avatarPick");
     const ph=document.getElementById("avatarPlaceholder");
     if(m && m.avatar){ pick.style.backgroundImage=`url('${m.avatar}')`; ph.textContent=""; }
@@ -984,15 +989,14 @@
   });
   document.getElementById("modalSave").addEventListener("click", ()=>{
     const name=document.getElementById("memberName").value.trim();
-    if(!name){ alert("請輸入名字"); return; }
     let changed;
     if(editingId){
       const m=memberById(editingId);
-      m.name=name;
       if(pendingAvatar!==null) m.avatar=pendingAvatar;
       m.updatedAt=Date.now(); m.synced=false;
       changed=m;
     }else{
+      if(!name){ alert("請輸入名字"); return; }
       const id=uid();
       changed={id, name, avatar: pendingAvatar||"", updatedAt:Date.now(), synced:false};
       state.members.push(changed);
